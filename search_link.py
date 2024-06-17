@@ -5,9 +5,10 @@ import datetime
 from os import sys, path
 import os
 from shutil import copy as cp
-from selenium.webdriver.common.keys import Keys
 from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 import traceback, logging, configparser
 
 
@@ -18,101 +19,142 @@ from bs4 import BeautifulSoup
 
 from ct_utils import fb_login, get_driver
 
+
 def search_links(links_file, rootdir):
-    rtic = lambda n: randint(1,n) # lag to simulate manual data collection
+    rtic = lambda n: randint(1, n)  # lag to simulate manual data collection
 
     ### get FB/CrowdTangle username and password from INI file
-    config_file = path.expanduser('~/config.ini')
+    config_file = path.expanduser("~/config.ini")
     config = configparser.ConfigParser()
     config.read(config_file)
-    username = 'nickgabriel8' #config['CrowdTangle']['username']
-    password = config['CrowdTangle']['password']
-   
+    username = "nickgabriel8"  # config['CrowdTangle']['username']
+    password = config["CrowdTangle"]["password"]
+
     ### selenium driver setup
-    browser = 'chrome' 
+    browser = "chrome"
     driver = get_driver(browser)
-    driver.implicitly_wait(4) # doesn't work for me but may work for you
+    driver.implicitly_wait(4)  # doesn't work for me but may work for you
 
     fb_login(driver, username, password)
-    driver.get('https://apps.crowdtangle.com/search/home')
-    sleep(4+rtic(4))
+    driver.get("https://apps.crowdtangle.com/search/home")
+    sleep(4 + rtic(4))
 
     ### build directory structure to write data
-    outdir = rootdir + 'out_search'
+    outdir = rootdir + "out_search"
     if not (os.path.exists(outdir)):
         os.mkdir(outdir)
     dt_string = datetime.datetime.now().strftime("%d-%m-%Y_%H_%M_%S")
-    write_dir = outdir + '/' + dt_string
+    write_dir = outdir + "/" + dt_string
     os.mkdir(write_dir)
-    cp(links_file,write_dir)
-    
-    links_df = pd.read_csv(links_file,index_col=0)
+    cp(links_file, write_dir)
+
+    links_df = pd.read_csv(links_file, index_col=0)
     indices = list(links_df.index)
     links = list(links_df.links)
 
-    for idx,link in zip(indices,links):    
-        
+    for idx, link in zip(indices, links):
+
         try:
-            clear_button = driver.find_element_by_xpath('//div[starts-with(@class,"searchBar__clearBtn")]')
+            clear_button = driver.find_element(
+                By.XPATH, '//div[starts-with(@class,"searchBar__clearBtn")]'
+            )
             clear_button.click()
         except:
             pass
-        
-        search_box = driver.find_element_by_xpath('//input[starts-with(@class,"searchBar")]')
+
+        search_box = driver.find_element(
+            By.XPATH, '//input[starts-with(@class,"searchBar")]'
+        )
         search_box.click()
         search_box.send_keys(link)
         search_box.send_keys(Keys.ENTER)
-        #return driver
-        sleep(6+rtic(4))
+        # return driver
+        sleep(30 + rtic(10))
 
-        platforms = driver.find_element_by_class_name('react-tab-container').find_elements_by_tag_name('div')
-        write_path = write_dir + '/' + 'link_' + str(idx)
+        platforms = driver.find_element(
+            By.CLASS_NAME, "react-tab-container"
+        ).find_elements(By.TAG_NAME, "div")
+        write_path = write_dir + "/" + "link_" + str(idx)
         os.mkdir(write_path)
         df = {}
         for element in platforms:
             name = element.text
             element.click()
-            sleep(2+rtic(3))
+            sleep(10 + rtic(10))
+
             try:
-                table = driver.find_element_by_xpath('//div[starts-with(@class,"searchResultsTable")]')
+                table = driver.find_element(
+                    By.XPATH, '//div[starts-with(@class,"searchResultsTable")]'
+                )
             except:
-                #print('no links on %s!' %name)
+                print(f"Error finding table for platform {name} and link {link}")
                 continue
-            source = table.get_attribute('outerHTML')
-            soup = BeautifulSoup(source, 'html.parser')
+            source = table.get_attribute("outerHTML")
+            soup = BeautifulSoup(source, "html.parser")
 
-            m = len(soup.find_all('a'))
-            hrefs = [soup.find_all('a')[i].get('href') for i in range(m) ]
-            #return soup
-            text = [soup.find_all('p')[i].text for i in range((m+1)*4) ]
-            cols = text[0:5]
-            rows = [text[5*i:(5*(i+1))] for i in range(1,m+1)]
+            rows = soup.find_all("div", class_="searchResultsTable__row--3QpGF")
+            print(f"Found {len(rows)} rows for {name}")
+            data = []
+            for row in rows:
+                try:
+                    page_name = (
+                        row.find("span", class_="fb-react-post-name-span").text
+                        if row.find("span", class_="fb-react-post-name-span")
+                        else ""
+                    )
+                    message = (
+                        row.find(
+                            "div", class_="searchResultsTable__messageContainer--DuJz0"
+                        ).text
+                        if row.find(
+                            "div", class_="searchResultsTable__messageContainer--DuJz0"
+                        )
+                        else ""
+                    )
+                    date = (
+                        row.find("p", class_="searchResultsTable__date--Qzbax").text
+                        if row.find("p", class_="searchResultsTable__date--Qzbax")
+                        else ""
+                    )
+                    interactions = (
+                        row.find(
+                            "p", class_="searchResultsTable__interactionCount--1uvOf"
+                        ).text
+                        if row.find(
+                            "p", class_="searchResultsTable__interactionCount--1uvOf"
+                        )
+                        else ""
+                    )
+                    external_link = (
+                        row.find("a", href=True)["href"]
+                        if row.find("a", href=True)
+                        else ""
+                    )
+                    data.append([page_name, message, date, interactions, external_link])
+                except Exception as e:
+                    print(
+                        f"Error processing row for platform {name} and link {link}: {e}"
+                    )
+                    continue
 
-            cols[0] = 'Page'
-            cols.insert(1,'Members')
-            cols = cols[0:5]
+            df[name] = pd.DataFrame(
+                data,
+                columns=[
+                    "page_name",
+                    "message",
+                    "date",
+                    "interactions",
+                    "external_link",
+                ],
+            )
 
-            df[name] = pd.DataFrame(rows, columns=cols[:len(rows[0])])
-            df[name]['hrefs'] = hrefs
-
-            spl = lambda x,delim,n: x.split(delim) if (n==0) else x.split(delim)[0:n]
-            joinif = lambda arr: ''.join(arr) if (len(arr)>1) else arr[0]
-            try:
-                df[name]['Interactions'] = df[name]['Interactions'].apply(spl,args=[',',0]).apply(joinif)
-            except:
-                pass
-            try:
-                df[name]['Members'] = df[name]['Members'].apply(spl,args=[' ',1]).apply(spl,args=[',',0]).apply(joinif)
-            except:
-                pass
-     
-            df[name].to_csv(write_path + '/' + name +'.csv')
+            df[name].to_csv(write_path + "/" + name + ".csv")
 
     driver.close()
-            
-if __name__ == '__main__':
 
-    rootdir = './'
-    links_file = 'links.csv'
+
+if __name__ == "__main__":
+
+    rootdir = "./"
+    links_file = "links.csv"
     search_links(links_file, rootdir)
-
